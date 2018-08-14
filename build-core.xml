@@ -1,0 +1,526 @@
+<?xml version="1.0" encoding="utf-8"?>
+<project name="BuildCore" default="release" xmlns:ant="antlib:net.sf.antcontrib" >
+	<!-- 引入和重写规范(写在前面)
+		1. -on-开头的，可以重写
+		2. -do-开头的，在子build.xml文件可以直接调用
+		3. -on-javadoc, 必须实现, 因为不可能通用，没有默认实现
+		4. 子build 可以调用-on-开头task， 相当于super.method
+	-->
+	<!-- build 过程中使用的目录 -->
+	<property environment="env" />
+	<property name="sdk.dir" value="${env.ANDROID_HOME}"/>
+	<property name="src" value="src"/>
+	<property name="build" value="build"/>
+	<property name="dest" value="dest"/>
+	<property name="tmp" value="tmp" />
+
+	<!-- option 参数 -->
+	<property name="local" value="false" />
+	<property name="branch" value="trunk" />
+	
+	<!-- svn 和 sdk 文件名相关参数 -->
+	<property name="svn.repo" value="${ant.project.name}"/>
+	<property name="sdk.project.name" value="${ant.project.name}"/>
+
+	<!-- 引入的第三库, 文件在libs目录下 -->
+	<taskdef classpath="./libs/pcp.jar" resource="m/pcp/ant/antlib.xml"/>
+	<taskdef classpath="./libs/xmltask.jar" name="xmltask" classname="com.oopsconsultancy.xmltask.ant.XmlTask"/>
+	<taskdef uri="antlib:net.sf.antcontrib" classpath="./libs/ant-contrib.jar" resource="net/sf/antcontrib/antlib.xml" />
+
+	<!-- 当前执行task, 主要用于区分 sdk/aar/apk -->
+	<!-- <ant:var name="ant.current.task" value="sdk" /> -->
+	
+	<selector id="sdk.delete.file">
+		<or>
+			<filename name="**/build/**" />
+			<filename name="**/.gradle/**" />
+			<filename name="**/gradle/**" />
+			<filename name="**/.settings/**" />
+			<filename name="**/.idea/**" />
+			<filename name="**/.svn/**" />
+			<filename name="**/**.iml" />
+			<filename name="**/local.properties" />
+			<filename name="**/test/**" />
+		</or>
+	</selector>
+	
+	<selector id="sdk.delete.empty.dir">
+		<and>
+			<type type="dir" />
+			<size value="0" when="equal" />
+		</and>
+	</selector>
+	
+	<target name="-init-build" depends="-clean-build">
+		<if condition="${jenkins}">
+			<then>
+				<property name="doc.lang" value="${jenkins.lang}"/>
+				<property name="sdk.debugable" value="${jenkins.debugable}"/>
+				<property name="sdk.version.name" value="${jenkins.sdk.version.name}"/>
+				<set name="lang" value="${jenkins.lang}"/>
+				<set name="sdk.debugable" value="${jenkins.debugable}"/>
+				<set name="sdk.version.name" value="${jenkins.sdk.version.name}"/>
+			</then>
+			<else>
+				<loadproperties srcFile="pcp.prop"/>
+			</else>
+		</if>
+		
+		<ant:var name="temp.value" unset="true" />
+		<ant:var name="temp.isinvalid" unset="true" />
+		<ant:propertyregex property="temp.value" input="${lang}" regexp="^(cn|en)$" select="\1" override="true" />
+		<condition property="temp.isinvalid" value="true" else="false">
+			<not>
+				<isset property="temp.value" />
+			</not>
+		</condition>
+		<if condition="${temp.isinvalid}" >
+			<then>
+				<fail message="请配置正确lang. lang 必须是{en, cn}中的一个." />
+			</then>
+		</if>
+		
+		<ant:var name="temp.value" unset="true" />
+		<ant:var name="temp.isinvalid" unset="true" />
+		<ant:propertyregex property="temp.value" input="${sdk.debugable}" regexp="^(true|false)$" select="\1" override="true" />
+		<condition property="temp.isinvalid" value="true" else="false">
+			<not>
+				<isset property="temp.value" />
+			</not>
+		</condition>
+		<if condition="${temp.isinvalid}" >
+			<then>
+				<fail message="请配置正确sdk.debugable. sdk.debugable 必须是{true, false}中的一个." />
+			</then>
+		</if>
+		<if condition="${sdk.debugable}">
+			<then>
+				<property name="build.gradle.task" value="assembleDebug" />
+			</then>
+			<else>
+				<property name="build.gradle.task" value="assembleRelease" />
+			</else>
+		</if>
+		
+		<ant:var name="temp.value" unset="true" />
+		<ant:var name="temp.isinvalid" unset="true" />
+		<ant:propertyregex property="temp.value" input="${sdk.version.name}" regexp="^(\d)\.(\d)\.(\d)$" select="\0" override="true" />
+		<condition property="temp.isinvalid" value="true" else="false">
+			<not>
+				<isset property="temp.value" />
+			</not>
+		</condition>
+		<if condition="${temp.isinvalid}" >
+			<then>
+				<fail message="请配置正确version.name. version.name 有三部分数字组成, 中间以'.'分隔, 每一部分只有一个数字. 例如：1.0.0, 2.1.1" />
+			</then>
+		</if>
+		<ant:propertyregex property="temp.value" input="${sdk.version.name}" regexp="(\.)" replace="0" global="true" override="true" />
+		<property name="sdk.version.int" value="${temp.value}" />
+		
+		<ant:var name="temp.value" unset="true" />
+		<ant:var name="temp.isinvalid" unset="true" />
+		<antcall target="-on-init-build" />
+	</target>
+	
+	<target name="-svn-account">
+		<if condition="${jenkins}">
+			<then>
+				<property name="svn-username" value="${jenkins.username}"/>
+				<property name="svn-password" value="${jenkins.password}"/>
+				<set name="svn-username" value="${jenkins.username}"/>
+				<set name="svn-password" value="${jenkins.password}"/>
+			</then>
+			<else>
+				<available file=".certificate" property="certificate.exist"/>
+				<if condition="${certificate.exist}">
+					<then>
+						<loadproperties srcFile=".certificate"/>
+					</then>
+				</if>
+			</else>
+		</if>
+		<condition property="svnuser.exist" value="true">
+			<and>
+				<isset property="svn-username" />
+				<isset property="svn-password" />
+			</and>
+		</condition>
+	</target>
+	
+	<target name="-prepare-src">
+		<if condition="${local}">
+			<then>
+				<antcall target="-local-co" />
+			</then>
+			<else>
+				<antcall target="-svn-co" />
+			</else>
+		</if>
+		<antcall target="-pcp-src" />
+		<antcall target="-on-prepare-src" />
+	</target>
+	
+	<target name="-local-co">
+		<copy todir="${src}" overwrite="true" force="true">
+			<fileset dir=".." >
+				<not>
+					<selector refid="sdk.delete.file" />
+				</not>
+			</fileset>
+		</copy>
+	</target>
+	
+	<target name="-svn-co" depends="-svn-account">	
+		<ant:var name="temp.svn.project" unset="true" />
+		<property name="temp.svn.project" value="${svn.repo}/branches/${branch}" />
+		<if condition="${svnuser.exist}">
+			<then>
+				<exec executable="svn">
+					<arg value="co"/>
+					<arg value="${temp.svn.project}"/>
+					<arg value="${src}"/>
+					<arg value="--username"/>
+					<arg value="${svn-username}"/>
+					<arg value="--password"/>
+					<arg value="${svn-password}"/>
+				</exec>
+			</then>
+			<else>
+				<exec executable="svn">
+					<arg value="co"/>
+					<arg value="${temp.svn.project}"/>
+					<arg value="${src}"/>
+				</exec>
+			</else>
+		</if>
+		<ant:var name="temp.svn.project" unset="true" />
+	</target>
+	
+	<target name="-pcp-src">
+		<pcp basedir="${basedir}" srcdir="${src}" builddir="${src}/tmp">
+		    <define file="${basedir}/pcp.prop"/>
+		</pcp>
+		<delete file="${src}/tmp/.define"/>
+		<move file="${src}/tmp" tofile="${src}" overwrite="true"/>
+
+		<ant:if>
+			<equals arg1="aar" arg2="${ant.current.task}" />
+			<then>
+				<xmltask source="${src}/${ant.project.name}/AndroidManifest.xml" dest="${src}/${ant.project.name}/AndroidManifest.xml" encoding="utf-8" >
+						<remove path="//manifest/application" />
+						<remove path="//manifest/uses-permission" />
+				</xmltask>
+			</then>
+		</ant:if>
+		<ant:if>
+			<equals arg1="aar" arg2="${ant.current.task}" />
+			<then>
+				<propertyfile file="${src}/AS-Proj-${ant.project.name}/gradle.properties">
+					<entry key="com.mob.sdk.autoconfig" type="string" operation="=" value="false"/>
+				</propertyfile>
+			</then>
+			<else>
+				<propertyfile file="${src}/AS-Proj-${ant.project.name}/gradle.properties">
+					<entry key="com.mob.sdk.autoconfig" type="string" operation="=" value="true"/>
+				</propertyfile>
+			</else>
+		</ant:if>
+		<antcall target="-on-pcp-src" />
+	</target>
+
+	<target name="-prepare-build">
+		<copy todir="${build}" overwrite="true" force="true">
+			<fileset dir="${src}" >
+				<not>
+					<selector refid="sdk.delete.file" />
+				</not>
+			</fileset>
+		</copy>
+	</target>
+	
+	<target name="-compile" depends="-prepare-build, -gradle-for-os">
+		<antcall target="-on-compile" />
+	</target>
+	
+	<target name="-javadoc">
+		<if condition="${lang} == cn">
+			<then>
+				<set name="java-doc-lang" value="zh_CN"/>
+			</then>
+			<else>
+				<set name="java-doc-lang" value="en_US"/>
+			</else>
+		</if>
+		<antcall target="-on-javadoc" >
+			<param name="javadoc.lang" value="${java-doc-lang}" />
+			<param name="javadoc.src" value="${src}" />
+			<param name="javadoc.dest" value="${tmp}/ApiDoc" />
+		</antcall>
+	</target>
+	
+	<target name="-gradle-for-os">
+		<condition property="executable.gradle" value="gradle.bat" else="gradle">
+			<os family="windows" />
+		</condition>
+	</target>
+	
+	<target name="-inner-github">
+		<antcall target="-javadoc" />
+		<antcall target="-on-apk" />
+		<copy todir="${tmp}" file="${src}/auto-build/Release_Log.txt"/>
+		<copy todir="${tmp}" file="${src}/auto-build/${ant.project.name}_User_Guide.url"/>
+		<copy todir="${tmp}" file="${src}/auto-build/${ant.project.name}_Demo_Code.url"/>
+		<copy todir="${tmp}/AS-Proj-${ant.project.name}">
+			<fileset dir="${src}/AS-Proj-${ant.project.name}">
+				<not>
+					<selector refid="sdk.delete.file" />
+				</not>
+			</fileset>
+		</copy>
+		<copy todir="${tmp}/${ant.project.name}-Demo">
+			<fileset dir="${src}/${ant.project.name}-Demo">
+				<not>
+					<selector refid="sdk.delete.file" />
+				</not>
+			</fileset>
+		</copy>
+
+		<echo file="${tmp}/AS-Proj-${ant.project.name}/settings.gradle" message="include ':${ant.project.name}-Demo'" append="false" />
+		<echo file="${tmp}/AS-Proj-${ant.project.name}/settings.gradle" message="${line.separator}" append="true" />
+		<echo file="${tmp}/AS-Proj-${ant.project.name}/settings.gradle" message="project(':${ant.project.name}-Demo').projectDir = new File('../${ant.project.name}-Demo')" append="true" />
+
+		<replaceregexp file="${tmp}/${ant.project.name}-Demo/build.gradle"
+               match="PaySDK\s*\{\s*version\s*.+?\s*\}" replace="PaySDK { version '${sdk.version.name}' }" flags="m" byline="false"/>
+	</target>
+
+	<target name="-sdk-split-libs" >
+		<antcall target="-on-sdk-split-libs" />
+		<delete includeemptydirs="true">
+			<fileset dir="${tmp}/${sdk.project.name}">
+				<include name="**/R.txt" />
+				<include name="**/AndroidManifest.xml" />
+				<include name="**/ShareSDK.xml" />
+				<include name="**/classes.jar" />
+			</fileset>
+		</delete>
+		
+		<delete includeemptydirs="true">
+			<fileset dir="${tmp}/${sdk.project.name}">
+				<selector refid="sdk.delete.empty.dir" />
+			</fileset>
+		</delete>
+	</target>
+
+	<target name="-clean-build">
+		<delete dir="${src}"/>
+		<delete dir="${build}"/>
+		<delete dir="${tmp}" />
+	</target>
+
+	<target name="-init-prepare-compile" depends="-init-build, -prepare-src, -compile" >
+	</target>
+
+	<target name="-do-compile">
+		<exec executable="${executable.gradle}">
+			<arg value="--project-dir=${build}/AS-Proj-${ant.project.name}"/>
+			<arg value="--no-daemon"/>
+			<arg value="clean"/>
+			<arg value="${build.gradle.task}"/>
+		</exec>
+	</target>
+
+	<target name="-on-init-build" >
+	</target>
+
+	<target name="-on-prepare-src">
+	</target>
+
+
+	<target name="-on-compile">
+		<antcall target="-do-compile"/>
+	</target>
+
+	<target name="-on-src">
+		<move todir="${tmp}">
+			<fileset dir="${src}" includes="**/**"/>
+		</move>
+	</target>
+
+	<target name="-on-sdk">
+	</target>
+
+	<target name="-on-sdk-copy-libs">
+		<copy todir="${tmp}/${sdk.project.name}/libs">
+			<fileset dir="${build}/${ant.project.name}/build/dependencies">
+				<include name="*.*" />
+			</fileset>
+		</copy>
+		<if condition="${sdk.debugable}">
+			<then>
+				<copy file="${build}/${ant.project.name}/build/outputs/aar/${ant.project.name}-debug.aar" 
+					tofile="${tmp}/${sdk.project.name}/libs/${sdk.project.name}-${sdk.version.name}.aar"  overwrite="true"/>
+			</then>
+			<else>
+				<copy file="${build}/${ant.project.name}/build/outputs/aar/${ant.project.name}-release.aar" 
+					tofile="${tmp}/${sdk.project.name}/libs/${sdk.project.name}-${sdk.version.name}.aar"  overwrite="true"/>
+			</else>
+		</if>
+	</target>
+
+	<target name="-on-aar">
+		<if condition="${sdk.debugable}">
+			<then>
+				<copy file="${build}/${ant.project.name}/build/outputs/aar/${ant.project.name}-debug.aar" 
+					tofile="${tmp}/${sdk.project.name}-${sdk.version.name}.aar"  overwrite="true"/>
+			</then>
+			<else>
+				<copy file="${build}/${ant.project.name}/build/outputs/aar/${ant.project.name}-release.aar" 
+					tofile="${tmp}/${sdk.project.name}-${sdk.version.name}.aar"  overwrite="true"/>
+			</else>
+		</if>
+	</target>
+
+	<target name="-on-sdk-split-libs" >
+	</target>
+
+	<target name="-on-apk">
+		<if condition="${sdk.debugable}">
+			<then>
+				<copy tofile="${tmp}/${ant.project.name}-Demo-${sdk.version.name}.apk" file="${build}/${ant.project.name}-Demo/build/outputs/apk/${ant.project.name}-Demo-debug.apk" />
+			</then>
+			<else>
+				<copy tofile="${tmp}/${ant.project.name}-Demo-${sdk.version.name}.apk" file="${build}/${ant.project.name}-Demo/build/outputs/apk/${ant.project.name}-Demo-release.apk" />
+			</else>
+		</if>
+	</target>
+	
+	<target name="src">
+		<ant:var name="ant.current.task" value="src" />
+		<antcall target="-src" inheritAll="true" />
+	</target>
+	<target name="-src" depends="-init-prepare-compile">
+		<antcall target="-on-src" />
+		<copy todir="${dest}">
+			<fileset dir="${tmp}">
+			</fileset>
+		</copy>
+		<antcall target="-clean-build" />
+	</target>
+
+	<target name="sdk">
+		<ant:var name="ant.current.task" value="sdk" />
+		<antcall target="-sdk" inheritAll="true" />
+	</target>
+	<target name="-sdk" depends="-init-prepare-compile">
+		<antcall target="-javadoc" />
+		<antcall target="-on-sdk-copy-libs"/>
+		<antcall target="-sdk-split-libs" />
+		<copy todir="${tmp}" file="${src}/auto-build/Release_Log.txt"/>
+		<copy todir="${tmp}" file="${basedir}/${sdk.project.name}_User_Guide.url"/>
+		<copy todir="${tmp}" file="${basedir}/${sdk.project.name}_Demo_Code.url"/>
+		<antcall target="-on-sdk" />
+		<delete includeemptydirs="true">
+			<fileset dir="${tmp}">
+				<selector refid="sdk.delete.file" />
+			</fileset>
+		</delete>
+		<zip destfile="${dest}/${sdk.project.name}-v${sdk.version.name}.zip" update="true" encoding="utf-8">
+			<zipfileset dir="${tmp}" prefix="v${sdk.version.name}"/>
+		</zip>
+		<antcall target="-clean-build" />
+	</target>
+	
+	<target name="apk" >
+		<ant:var name="ant.current.task" value="apk" unset="true" />
+		<antcall target="-apk" inheritAll="true" />
+	</target>
+	<target name="-apk" depends="-init-prepare-compile" >
+		<antcall target="-on-apk" />
+		<copy tofile="${dest}/${ant.project.name}-Demo-${sdk.version.name}.apk" file="${tmp}/${ant.project.name}-Demo-${sdk.version.name}.apk" />
+		<antcall target="-clean-build" />
+	</target>
+	
+	<target name="aar">
+		<ant:var name="ant.current.task" value="aar" />
+		<antcall target="-aar" inheritAll="true" />
+	</target>
+
+	<target name="-aar" depends="-init-prepare-compile">
+		<antcall target="-on-aar"/>
+		<copy todir="${dest}">
+			<fileset dir="${tmp}">
+				<include name="*.aar" />
+			</fileset>
+		</copy>
+		<antcall target="-clean-build" />
+	</target>
+	
+	<target name="branch" depends="-init-build, -svn-account">
+		<list name="svns">
+			<item value="${svn.repo}/branches"/>
+		</list>
+		<ant:var name="temp.value" unset="true" />
+		<for iterator="svn" list="svns">
+			<if condition="${svnuser.exist}">
+				<then>
+					<exec executable="svn">
+						<arg value="ls"/>
+						<arg value="${svn#value}"/>
+						<arg value="--username"/>
+						<arg value="${svn-username}"/>
+						<arg value="--password"/>
+						<arg value="${svn-password}"/>
+					</exec>
+				</then>
+				<else>
+					<exec executable="svn">
+						<arg value="ls"/>
+						<arg value="${svn#value}"/>
+					</exec>
+				</else>
+			</if>	
+		</for>
+	</target>
+	
+	<target name="github" depends="-init-prepare-compile">
+		<antcall target="-inner-github" />
+		<copy todir="${dest}">
+			<fileset dir="${tmp}">
+			</fileset>
+		</copy>
+		<antcall target="-clean-build" />
+	</target>
+
+	<target name="release" depends="sdk">
+	</target>
+	
+	<target name="clean" depends="-clean-build">
+		<delete dir="${dest}"/>
+	</target>
+	
+	<target name="help">
+		<echo message="
+		Usage: ant -f build.xml [TARGET] [OPTIONS]" />
+		<echo message="
+		生成${ant.project.name} SDK, DEMO apk, DEMO for github."/>
+		<echo message="
+		[TARGET], ant target" />
+		<echo message="
+		[OPTIONS], 必须是ant的-Dkey=value形式, 不是命令行-version形式" />
+		<echo message="" />
+		<echo message="Target:" />
+		<echo message="help:		说明手册" />
+		<echo message="src:			build一套代码, 可用来生成SDK zip或者apk. gradle结构代码" />
+		<echo message="sdk:			build SDK zip" />
+		<echo message="aar:			build SDK aar for maven" />
+		<echo message="apk:			build demo apk." />
+		<echo message="release:		build SDK zip, 与sdk target一样" />
+		<echo message="branch:		列出svn branches 和 tags, branch option 使用" />
+		<echo message="github:		生成放在github上的内容" />
+		<echo message="" />
+		<echo message="Options:" />
+		<echo message="local:		bool, 可选. 默认 false. true, 表示不使用svn上的代码而使用本地代码." />
+		<echo message="branch:		string, 可选. 默认 trunk. 操作代码分支, 默认是主分支, 查看分支请使用target branch." />
+	</target>
+</project>
