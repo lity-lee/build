@@ -41,12 +41,12 @@ ext.findCompileSdkVersion = {
 }
 
 ext.findProguardFile = {
-    String proguardFile = null;
-    def srcDir = new File(projectDir, "src")
-    srcDir = srcDir.listFiles();
-    if (null != srcDir && srcDir.length > 0) {
-        def file = new File(projectDir, "proguard-project.txt")
+    def file = new File(projectDir, "proguard-project.txt")
+    def proguardFile
+    if (null != file && file.isFile()) {
         proguardFile = file.getAbsolutePath()
+    } else {
+        proguardFile = null
     }
     logForfind("findProguardFile:" + proguardFile);
     return proguardFile;
