@@ -291,7 +291,7 @@
 		<echo file="${tmp}/AS-Proj-${ant.project.name}/settings.gradle" message="project(':${ant.project.name}-Demo').projectDir = new File('../${ant.project.name}-Demo')" append="true" />
 
 		<replaceregexp file="${tmp}/${ant.project.name}-Demo/build.gradle"
-               match="PaySDK\s*\{\s*version\s*.+?\s*\}" replace="PaySDK { version '${sdk.version.name}' }" flags="m" byline="false"/>
+               match="${sdk.project.name}\s*\{\s*version\s*.+?\s*\}" replace="${sdk.project.name} { version '${sdk.version.name}' }" flags="m" byline="false"/>
 	</target>
 
 	<target name="-sdk-split-libs" >
